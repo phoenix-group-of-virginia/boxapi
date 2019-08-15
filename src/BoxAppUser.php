@@ -7,6 +7,7 @@ use Lcobucci\JWT\Builder;
 use Lcobucci\JWT\Signer\Key;
 use Lcobucci\JWT\Signer\Rsa\Sha256;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class BoxAppUser
 {
@@ -85,46 +86,51 @@ class BoxAppUser
 
 	protected function getToken($id = '', $type = '') {
 
-		if (empty($id)) {
-			$id = $this->config['app_user_id'];
-			$type = "user";
-		}
+			$cache = false;
 
-		$signer = new Sha256();
+			if (empty($id)) {
+				$id = $this->config['app_user_id'];
+				$type = "user";
+				$cache = 'true';
+			}
 
-		// Set path of private_key.pem. Overwrite the default file as sample.
-		$privateKeyString = new Key(
-			"file://" . $this->config['private_key_file'], $this->config['passphrase']
-		);
+			$signer = new Sha256();
 
-		$assertion = (new Builder())
-			->setHeader('kid', $this->config['public_key_id'])
-			->setIssuer($this->config['au_client_id'])
-			->setSubject($id)
-			->set('box_sub_type', $type)
-			->setAudience($this->audience_url)
-			->setId(uniqid('ABC'))
-			->setIssuedAt(time())
-			->setExpiration(time() + $this->config['expiration'])
-		    ->sign($signer,  $privateKeyString)
-		    ->getToken();
+			// Set path of private_key.pem. Overwrite the default file as sample.
+			$privateKeyString = new Key(
+				"file://" . $this->config['private_key_file'], $this->config['passphrase']
+			);
 
-		$attributes = "-d 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer";
+			$assertion = (new Builder())
+				->setHeader('kid', $this->config['public_key_id'])
+				->setIssuer($this->config['au_client_id'])
+				->setSubject($id)
+				->set('box_sub_type', $type)
+				->setAudience($this->audience_url)
+				->setId(uniqid('ABC'))
+				->setIssuedAt(time())
+				->setExpiration(time() + $this->config['expiration'])
+				->sign($signer,  $privateKeyString)
+				->getToken();
 
-		$cid = $this->config['au_client_id'];
-		$csc = $this->config['au_client_secret'];
+			$attributes = "-d 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer";
 
-		$result = Cache::remember('access_token', 1800, function (){
-				return shell_exec("curl $this->token_url $attributes&client_id=$cid&client_secret=$csc&assertion=$assertion' -X POST");
-			});
-		try
-		{
-	            $this->access_token = json_decode($result, true)["access_token"];
-		}
-		catch(\Exception $exception)
-		{
-		    throw new \Exception("Can't get the access_token for this user configuration...");
-		}
+			$cid = $this->config['au_client_id'];
+			$csc = $this->config['au_client_secret'];
+
+			$result = shell_exec("curl $this->token_url $attributes&client_id=$cid&client_secret=$csc&assertion=$assertion' -X POST");
+
+			if($cache){
+				$this->access_token = Cache::remember('box_user_api_token', $this->config['expiration'] * 59, function () use ($result) {
+					Log::info('cache miss');
+					return json_decode($result)->access_token;
+				});
+			} else {
+				$this->access_token = Cache::remember('box_enterprise_api_token', $this->config['expiration'] * 59, function () use ($result) {
+					Log::info('cache miss');
+					return json_decode($result)->access_token;
+				});
+			}
 
 		$this->auth_header 	= "-H \"Authorization: Bearer $this->access_token\"";
 
